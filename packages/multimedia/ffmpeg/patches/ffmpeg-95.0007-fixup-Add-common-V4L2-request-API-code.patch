@@ -1,0 +1,67 @@
+From 40b957f924f73b679c6166b89c88857866d6ed9a Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Fri, 17 May 2019 06:07:33 +0000
+Subject: [PATCH] fixup! Add common V4L2 request API code
+
+---
+ configure                 | 4 ++++
+ libavcodec/v4l2_request.c | 7 +++++--
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/configure b/configure
+index 9252ca5794..2d39cecbdf 100755
+--- a/configure
++++ b/configure
+@@ -6165,6 +6165,10 @@ enabled rkmpp             && { require_pkg_config rkmpp rockchip_mpp  rockchip/r
+                                { enabled libdrm ||
+                                  die "ERROR: rkmpp requires --enable-libdrm"; }
+                              }
++enabled v4l2_request      && { enabled libdrm ||
++                               die "ERROR: v4l2-request requires --enable-libdrm"; } &&
++                             { enabled libudev ||
++                               die "ERROR: v4l2-request requires --enable-libudev"; }
+
+ if enabled gcrypt; then
+     GCRYPT_CONFIG="${cross_prefix}libgcrypt-config"
+diff --git a/libavcodec/v4l2_request.c b/libavcodec/v4l2_request.c
+index 1ede44ef37..4980a6ef60 100644
+--- a/libavcodec/v4l2_request.c
++++ b/libavcodec/v4l2_request.c
+@@ -74,7 +74,7 @@ static int v4l2_request_queue_buffer(V4L2RequestContext *ctx, int request_fd, V4
+         .type = buf->buffer.type,
+         .memory = buf->buffer.memory,
+         .index = buf->index,
+-        .timestamp.tv_usec = buf->index,
++        .timestamp.tv_usec = buf->index + 1,
+         .bytesused = buf->used,
+         .request_fd = request_fd,
+         .flags = (request_fd >= 0) ? V4L2_BUF_FLAG_REQUEST_FD : 0,
+@@ -175,6 +175,8 @@ int ff_v4l2_request_decode_frame(AVCodecContext *avctx, AVFrame *frame, struct v
+         return -1;
+     }
+ 
++    memset(req->output.addr + req->output.used, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++
+     ret = v4l2_request_queue_buffer(ctx, req->request_fd, &req->output);
+     if (ret < 0) {
+         av_log(avctx, AV_LOG_ERROR, "%s: queue output buffer %d failed for request %d, %s (%d)\n", __func__, req->output.index, req->request_fd, strerror(errno), errno);
+@@ -720,7 +722,6 @@ static int v4l2_request_buffer_alloc(AVCodecContext *avctx, V4L2RequestBuffer *b
+     buf->buffer.type = type;
+     buf->buffer.memory = V4L2_MEMORY_MMAP;
+     buf->buffer.index = buf->index;
+-    buf->buffer.timestamp.tv_usec = buf->index;
+ 
+     ret = ioctl(ctx->video_fd, VIDIOC_QUERYBUF, &buf->buffer);
+     if (ret < 0) {
+@@ -728,6 +729,8 @@ static int v4l2_request_buffer_alloc(AVCodecContext *avctx, V4L2RequestBuffer *b
+         return ret;
+     }
+ 
++    buf->buffer.timestamp.tv_usec = buf->index + 1;
++
+     if (V4L2_TYPE_IS_OUTPUT(type)) {
+         void *addr = mmap(NULL, buf->size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->video_fd, V4L2_TYPE_IS_MULTIPLANAR(type) ? buf->buffer.m.planes[0].m.mem_offset : buf->buffer.m.offset);
+         if (addr == MAP_FAILED) {
+-- 
+2.21.0
+

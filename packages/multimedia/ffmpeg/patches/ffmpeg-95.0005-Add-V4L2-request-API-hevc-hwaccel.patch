@@ -22,7 +22,7 @@ index 296ca78ce7..9252ca5794 100755
  hevc_dxva2_hwaccel_select="hevc_decoder"
  hevc_nvdec_hwaccel_deps="nvdec"
  hevc_nvdec_hwaccel_select="hevc_decoder"
-+hevc_v4l2request_hwaccel_deps="v4l2_request hevc_v4l2_request"
++hevc_v4l2request_hwaccel_deps="v4l2_request"
 +hevc_v4l2request_hwaccel_select="hevc_decoder"
  hevc_vaapi_hwaccel_deps="vaapi VAPictureParameterBufferHEVC"
  hevc_vaapi_hwaccel_select="hevc_decoder"
@@ -480,7 +480,7 @@ index 0000000000..300c1866ce
 +
 +static int v4l2_request_hevc_init(AVCodecContext *avctx)
 +{
-+    return ff_v4l2_request_init(avctx, V4L2_PIX_FMT_HEVC_SLICE, 2 * 1024 * 1024, NULL, 0);
++    return ff_v4l2_request_init(avctx, V4L2_PIX_FMT_HEVC_SLICE, 4 * 1024 * 1024, NULL, 0);
 +}
 +
 +const AVHWAccel ff_hevc_v4l2request_hwaccel = {
