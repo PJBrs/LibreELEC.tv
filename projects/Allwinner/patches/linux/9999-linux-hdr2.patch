@@ -1,0 +1,717 @@
+From 9ff03e88b4eaac572f837df9bded7b6f4f106692 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 25 Mar 2018 17:47:26 +0200
+Subject: [PATCH 1/9] HACK: drm/bridge/synopsys: dw-hdmi: use underscan and
+ full range
+
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 09fdc9f87651..992b65b24b45 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -1498,7 +1498,7 @@ static void hdmi_config_AVI(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ 		break;
+ 	}
+ 
+-	frame.scan_mode = HDMI_SCAN_MODE_NONE;
++	frame.scan_mode = HDMI_SCAN_MODE_UNDERSCAN;
+ 
+ 	/*
+ 	 * The Designware IP uses a different byte format from standard
+@@ -1526,6 +1526,8 @@ static void hdmi_config_AVI(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ 	      (frame.active_aspect & 0xf);
+ 	hdmi_writeb(hdmi, val, HDMI_FC_AVICONF1);
+ 
++	frame.quantization_range = HDMI_QUANTIZATION_RANGE_FULL;
++
+ 	/* AVI data byte 3 differences: none */
+ 	val = ((frame.extended_colorimetry & 0x7) << 4) |
+ 	      ((frame.quantization_range & 0x3) << 2) |
+-- 
+2.21.0
+
+From d21a2f2577226f3a8d43e9c7ab28bda27f666bad Mon Sep 17 00:00:00 2001
+From: Neil Armstrong <narmstrong@baylibre.com>
+Date: Mon, 20 May 2019 15:37:49 +0200
+Subject: [PATCH 3/9] drm/bridge: dw-hdmi: allow ycbcr420 modes for >= 0x200a
+
+Now the DW-HDMI Controller supports the HDMI2.0 modes, enable support
+for these modes in the connector if the platform supports them.
+We limit these modes to DW-HDMI IP version >= 0x200a which
+are designed to support HDMI2.0 display modes.
+
+Signed-off-by: Neil Armstrong <narmstrong@baylibre.com>
+Tested-by: Heiko Stuebner <heiko@sntech.de>
+Reviewed-by: Andrzej Hajda <a.hajda@samsung.com>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 6 ++++++
+ include/drm/bridge/dw_hdmi.h              | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 992b65b24b45..3089cdaa583b 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2675,6 +2675,12 @@ __dw_hdmi_probe(struct platform_device *pdev,
+ 	if (hdmi->phy.ops->setup_hpd)
+ 		hdmi->phy.ops->setup_hpd(hdmi, hdmi->phy.data);
+ 
++	if (hdmi->version >= 0x200a)
++		hdmi->connector.ycbcr_420_allowed =
++			hdmi->plat_data->ycbcr_420_allowed;
++	else
++		hdmi->connector.ycbcr_420_allowed = false;
++
+ 	memset(&pdevinfo, 0, sizeof(pdevinfo));
+ 	pdevinfo.parent = dev;
+ 	pdevinfo.id = PLATFORM_DEVID_AUTO;
+diff --git a/include/drm/bridge/dw_hdmi.h b/include/drm/bridge/dw_hdmi.h
+index 531213a59d6f..91fe1ff1e0ea 100644
+--- a/include/drm/bridge/dw_hdmi.h
++++ b/include/drm/bridge/dw_hdmi.h
+@@ -130,6 +130,7 @@ struct dw_hdmi_plat_data {
+ 					   const struct drm_display_mode *mode);
+ 	unsigned long input_bus_format;
+ 	unsigned long input_bus_encoding;
++	bool ycbcr_420_allowed;
+ 
+ 	/* Vendor PHY support */
+ 	const struct dw_hdmi_phy_ops *phy_ops;
+-- 
+2.21.0
+
+
+From 5565b9780c206dea8206e379596c39600a294b6d Mon Sep 17 00:00:00 2001
+From: Neil Armstrong <narmstrong@baylibre.com>
+Date: Mon, 20 May 2019 15:37:50 +0200
+Subject: [PATCH 4/9] drm/bridge: add encoder support to specify bridge input
+ format
+
+This patch adds a new format_set() callback to the bridge ops permitting
+the encoder to specify the new input format and encoding.
+
+This allows supporting the very specific HDMI2.0 YUV420 output mode
+when the bridge cannot convert from RGB or YUV444 to YUV420.
+
+In this case, the encode must downsample before the bridge and must
+specify the bridge the new input bus format differs.
+
+This will also help supporting the YUV420 mode where the bridge cannot
+downsample, and also support 10bit, 12bit and 16bit output modes
+when the bridge cannot convert between different bit depths.
+
+Signed-off-by: Neil Armstrong <narmstrong@baylibre.com>
+---
+ drivers/gpu/drm/drm_bridge.c | 35 +++++++++++++++++++++++++++++++++++
+ include/drm/drm_bridge.h     | 19 +++++++++++++++++++
+ 2 files changed, 54 insertions(+)
+
+diff --git a/drivers/gpu/drm/drm_bridge.c b/drivers/gpu/drm/drm_bridge.c
+index 138b2711d389..33be74a977f7 100644
+--- a/drivers/gpu/drm/drm_bridge.c
++++ b/drivers/gpu/drm/drm_bridge.c
+@@ -307,6 +307,41 @@ void drm_bridge_mode_set(struct drm_bridge *bridge,
+ }
+ EXPORT_SYMBOL(drm_bridge_mode_set);
+ 
++/**
++ * drm_bridge_format_set - setup with proposed input format and encoding for
++ *			   all bridges in the encoder chain
++ * @bridge: bridge control structure
++ * @input_bus_format: proposed input bus format for the bridge
++ * @input_encoding: proposed input encoding for this bridge
++ *
++ * Calls &drm_bridge_funcs.format_set op for all the bridges in the
++ * encoder chain, starting from the first bridge to the last.
++ *
++ * Note: the bridge passed should be the one closest to the encoder
++ *
++ * RETURNS:
++ * true on success, false if one of the bridge cannot handle the format
++ */
++bool drm_bridge_format_set(struct drm_bridge *bridge,
++			   const u32 input_bus_format,
++			   const u32 input_encoding)
++{
++	bool ret = true;
++
++	if (!bridge)
++		return true;
++
++	if (bridge->funcs->format_set)
++		ret = bridge->funcs->format_set(bridge, input_bus_format,
++						input_encoding);
++	if (!ret)
++		return ret;
++
++	return drm_bridge_format_set(bridge->next, input_bus_format,
++				     input_encoding);
++}
++EXPORT_SYMBOL(drm_bridge_format_set);
++
+ /**
+  * drm_bridge_pre_enable - prepares for enabling all
+  *			   bridges in the encoder chain
+diff --git a/include/drm/drm_bridge.h b/include/drm/drm_bridge.h
+index 9da8c93f7976..19a0ca81a3d8 100644
+--- a/include/drm/drm_bridge.h
++++ b/include/drm/drm_bridge.h
+@@ -198,6 +198,22 @@ struct drm_bridge_funcs {
+ 	void (*mode_set)(struct drm_bridge *bridge,
+ 			 const struct drm_display_mode *mode,
+ 			 const struct drm_display_mode *adjusted_mode);
++
++	/**
++	 * @format_set:
++	 *
++	 * This callback should configure the bridge for the given input bus
++	 * format and encoding. It is called after the @format_set callback
++	 * for the preceding element in the display pipeline has been called
++	 * already. If the bridge is the first element then this would be
++	 * &drm_encoder_helper_funcs.format_set. The display pipe (i.e.
++	 * clocks and timing signals) is off when this function is called.
++	 *
++	 * @returns: true in success, false is a bridge refuses the format
++	 */
++	bool (*format_set)(struct drm_bridge *bridge,
++			   const u32 input_bus_format,
++			   const u32 input_encoding);
+ 	/**
+ 	 * @pre_enable:
+ 	 *
+@@ -312,6 +328,9 @@ void drm_bridge_post_disable(struct drm_bridge *bridge);
+ void drm_bridge_mode_set(struct drm_bridge *bridge,
+ 			 const struct drm_display_mode *mode,
+ 			 const struct drm_display_mode *adjusted_mode);
++bool drm_bridge_format_set(struct drm_bridge *bridge,
++			   const u32 input_bus_format,
++			   const u32 input_encoding);
+ void drm_bridge_pre_enable(struct drm_bridge *bridge);
+ void drm_bridge_enable(struct drm_bridge *bridge);
+ 
+-- 
+2.21.0
+
+
+From ce5e56a7fdc5caf222f14494df9a592fba6be316 Mon Sep 17 00:00:00 2001
+From: Neil Armstrong <narmstrong@baylibre.com>
+Date: Mon, 20 May 2019 15:37:51 +0200
+Subject: [PATCH 5/9] drm/bridge: dw-hdmi: Add support for dynamic output
+ format setup
+
+In order to support the HDMI2.0 YUV420, YUV422 and the 10bit, 12bit and
+16bits outpu use cases, add support for the recently introduced bridge
+callback format_set().
+
+This callback will setup the new input format and encoding from encoder,
+then these information will be used instead of the default ones
+in the dw_hdmi_setup() function.
+
+To determine the output bus format, has been added :
+- support for the connector display_info bus_formats, where a fixed
+  output bus format can be enforced by the encoder
+- support for synami output bus format depending on the input format,
+  especially the YUV420 input bus format, enforcing YUV420 as output
+  with the correct bit depth
+
+Signed-off-by: Neil Armstrong <narmstrong@baylibre.com>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 121 ++++++++++++++++++++--
+ 1 file changed, 112 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 3089cdaa583b..ad0e7d7b772e 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -103,6 +103,8 @@ struct hdmi_vmode {
+ };
+ 
+ struct hdmi_data_info {
++	unsigned int bridge_in_bus_format;
++	unsigned int bridge_in_encoding;
+ 	unsigned int enc_in_bus_format;
+ 	unsigned int enc_out_bus_format;
+ 	unsigned int enc_in_encoding;
+@@ -1870,8 +1872,51 @@ static void hdmi_disable_overflow_interrupts(struct dw_hdmi *hdmi)
+ 		    HDMI_IH_MUTE_FC_STAT2);
+ }
+ 
++/*
++ * The DW-HDMI CSC can only interpolate and decimate from 4:2:2 to 4:4:4/RGB
++ * and from 4:4:4/RGB to 4:2:2.
++ * Default to RGB output except if 4:2:0 as input, which CSC cannot convert.
++ */
++static unsigned long dw_hdmi_determine_output_bus_format(struct dw_hdmi *hdmi)
++{
++	unsigned int depth = hdmi_bus_fmt_color_depth(
++					hdmi->hdmi_data.enc_in_bus_format);
++	bool is_420 = hdmi_bus_fmt_is_yuv420(hdmi->hdmi_data.enc_in_bus_format);
++	unsigned long fmt = MEDIA_BUS_FMT_RGB888_1X24;
++
++	switch (depth) {
++	case 8:
++		if (is_420)
++			fmt = MEDIA_BUS_FMT_UYYVYY8_0_5X24;
++		else
++			fmt = MEDIA_BUS_FMT_RGB888_1X24;
++		break;
++	case 10:
++		if (is_420)
++			fmt = MEDIA_BUS_FMT_UYYVYY10_0_5X30;
++		else
++			fmt = MEDIA_BUS_FMT_RGB101010_1X30;
++		break;
++	case 12:
++		if (is_420)
++			fmt = MEDIA_BUS_FMT_UYYVYY12_0_5X36;
++		else
++			fmt = MEDIA_BUS_FMT_RGB121212_1X36;
++		break;
++	case 16:
++		if (is_420)
++			fmt = MEDIA_BUS_FMT_UYYVYY16_0_5X48;
++		else
++			fmt = MEDIA_BUS_FMT_RGB161616_1X48;
++		break;
++	}
++
++	return fmt;
++}
++
+ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ {
++	struct drm_display_info *display = &hdmi->connector.display_info;
+ 	int ret;
+ 
+ 	hdmi_disable_overflow_interrupts(hdmi);
+@@ -1885,9 +1930,9 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ 	}
+ 
+ 	if ((hdmi->vic == 6) || (hdmi->vic == 7) ||
+-	    (hdmi->vic == 21) || (hdmi->vic == 22) ||
+-	    (hdmi->vic == 2) || (hdmi->vic == 3) ||
+-	    (hdmi->vic == 17) || (hdmi->vic == 18))
++		 (hdmi->vic == 21) || (hdmi->vic == 22) ||
++		 (hdmi->vic == 2) || (hdmi->vic == 3) ||
++		 (hdmi->vic == 17) || (hdmi->vic == 18))
+ 		hdmi->hdmi_data.enc_out_encoding = V4L2_YCBCR_ENC_601;
+ 	else
+ 		hdmi->hdmi_data.enc_out_encoding = V4L2_YCBCR_ENC_709;
+@@ -1895,22 +1940,29 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ 	hdmi->hdmi_data.video_mode.mpixelrepetitionoutput = 0;
+ 	hdmi->hdmi_data.video_mode.mpixelrepetitioninput = 0;
+ 
+-	/* TOFIX: Get input format from plat data or fallback to RGB888 */
+-	if (hdmi->plat_data->input_bus_format)
++	if (hdmi->hdmi_data.bridge_in_bus_format)
++		hdmi->hdmi_data.enc_in_bus_format =
++			hdmi->hdmi_data.bridge_in_bus_format;
++	else if (hdmi->plat_data->input_bus_format)
+ 		hdmi->hdmi_data.enc_in_bus_format =
+ 			hdmi->plat_data->input_bus_format;
+ 	else
+ 		hdmi->hdmi_data.enc_in_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+ 
+-	/* TOFIX: Get input encoding from plat data or fallback to none */
+-	if (hdmi->plat_data->input_bus_encoding)
++	if (hdmi->hdmi_data.bridge_in_encoding)
++		hdmi->hdmi_data.enc_in_encoding =
++			hdmi->hdmi_data.bridge_in_encoding;
++	else if (hdmi->plat_data->input_bus_encoding)
+ 		hdmi->hdmi_data.enc_in_encoding =
+ 			hdmi->plat_data->input_bus_encoding;
+ 	else
+ 		hdmi->hdmi_data.enc_in_encoding = V4L2_YCBCR_ENC_DEFAULT;
+ 
+-	/* TOFIX: Default to RGB888 output format */
+-	hdmi->hdmi_data.enc_out_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
++	if (display->num_bus_formats)
++		hdmi->hdmi_data.enc_out_bus_format = display->bus_formats[0];
++	else
++		hdmi->hdmi_data.enc_out_bus_format =
++				dw_hdmi_determine_output_bus_format(hdmi);
+ 
+ 	hdmi->hdmi_data.pix_repet_factor = 0;
+ 	hdmi->hdmi_data.hdcp_enable = 0;
+@@ -2200,6 +2252,56 @@ dw_hdmi_bridge_mode_valid(struct drm_bridge *bridge,
+ 	return mode_status;
+ }
+ 
++static bool dw_hdmi_drm_bridge_format_set(struct drm_bridge *bridge,
++					 const u32 input_bus_format,
++					 const u32 input_encoding)
++{
++	struct dw_hdmi *hdmi = bridge->driver_private;
++
++	/* Filter supported input bus formats */
++	switch (input_bus_format) {
++	case MEDIA_BUS_FMT_RGB888_1X24:
++	case MEDIA_BUS_FMT_RGB101010_1X30:
++	case MEDIA_BUS_FMT_RGB121212_1X36:
++	case MEDIA_BUS_FMT_RGB161616_1X48:
++	case MEDIA_BUS_FMT_YUV8_1X24:
++	case MEDIA_BUS_FMT_YUV10_1X30:
++	case MEDIA_BUS_FMT_YUV12_1X36:
++	case MEDIA_BUS_FMT_YUV16_1X48:
++	case MEDIA_BUS_FMT_UYVY8_1X16:
++	case MEDIA_BUS_FMT_UYVY10_1X20:
++	case MEDIA_BUS_FMT_UYVY12_1X24:
++	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
++	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
++	case MEDIA_BUS_FMT_UYYVYY12_0_5X36:
++	case MEDIA_BUS_FMT_UYYVYY16_0_5X48:
++		break;
++	default:
++		dev_dbg(hdmi->dev, "Unsupported Input bus format %x\n",
++			input_bus_format);
++		return false;
++	}
++
++	/* Filter supported input bus encoding */
++	switch (input_encoding) {
++	case V4L2_YCBCR_ENC_DEFAULT:
++	case V4L2_YCBCR_ENC_601:
++	case V4L2_YCBCR_ENC_709:
++	case V4L2_YCBCR_ENC_XV601:
++	case V4L2_YCBCR_ENC_XV709:
++		break;
++	default:
++		dev_dbg(hdmi->dev, "Unsupported Input encoding %x\n",
++			input_bus_format);
++		return false;
++	}
++
++	hdmi->hdmi_data.bridge_in_bus_format = input_bus_format;
++	hdmi->hdmi_data.bridge_in_encoding = input_encoding;
++
++	return true;
++}
++
+ static void dw_hdmi_bridge_mode_set(struct drm_bridge *bridge,
+ 				    const struct drm_display_mode *orig_mode,
+ 				    const struct drm_display_mode *mode)
+@@ -2242,6 +2344,7 @@ static const struct drm_bridge_funcs dw_hdmi_bridge_funcs = {
+ 	.disable = dw_hdmi_bridge_disable,
+ 	.mode_set = dw_hdmi_bridge_mode_set,
+ 	.mode_valid = dw_hdmi_bridge_mode_valid,
++	.format_set = dw_hdmi_drm_bridge_format_set,
+ };
+ 
+ static irqreturn_t dw_hdmi_i2c_irq(struct dw_hdmi *hdmi)
+-- 
+2.21.0
+
+
+From e1400d7a137e5350d2d3298d82b2bb3cb7764918 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 26 May 2019 16:31:49 +0000
+Subject: [PATCH 6/9] drm/bridge: dw-hdmi: Add Dynamic Range and Mastering
+ InfoFrame support
+
+Add support for configuring Dynamic Range and Mastering InfoFrame from
+the hdr_output_metadata connector property.
+
+This patch adds a drm_infoframe flag to dw_hdmi_plat_data that platform drivers
+use to signal when Dynamic Range and Mastering infoframes is supported.
+This flag is needed because Amlogic GXBB and GXL report same DW-HDMI version,
+and only GXL support DRM InfoFrame.
+
+These changes were based on work done by Zheng Yang <zhengyang@rock-chips.com>
+to support DRM InfoFrame on the Rockchip 4.4 BSP kernel at [1] and [2]
+
+[1] https://github.com/rockchip-linux/kernel/tree/develop-4.4
+[2] https://github.com/rockchip-linux/kernel/commit/d1943fde81ff41d7cca87f4a42f03992e90bddd5
+
+Cc: Zheng Yang <zhengyang@rock-chips.com>
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c | 109 ++++++++++++++++++++++
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.h |  37 ++++++++
+ include/drm/bridge/dw_hdmi.h              |   1 +
+ 3 files changed, 147 insertions(+)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index ad0e7d7b772e..0ac5e52528d8 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -24,6 +24,7 @@
+ 
+ #include <drm/drm_of.h>
+ #include <drm/drmP.h>
++#include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
+ #include <drm/drm_edid.h>
+ #include <drm/drm_encoder_slave.h>
+@@ -1624,6 +1625,78 @@ static void hdmi_config_vendor_specific_infoframe(struct dw_hdmi *hdmi,
+ 			HDMI_FC_DATAUTO0_VSD_MASK);
+ }
+ 
++#define HDR_LSB(n) ((n) & 0xff)
++#define HDR_MSB(n) (((n) & 0xff00) >> 8)
++
++static void hdmi_config_drm_infoframe(struct dw_hdmi *hdmi)
++{
++	const struct drm_connector_state *conn_state = hdmi->connector.state;
++	struct hdmi_drm_infoframe frame;
++	int ret;
++
++	if (hdmi->version < 0x200a || !hdmi->plat_data->drm_infoframe)
++		return;
++
++	hdmi_modb(hdmi, HDMI_FC_PACKET_TX_EN_DRM_DISABLE,
++		  HDMI_FC_PACKET_TX_EN_DRM_MASK, HDMI_FC_PACKET_TX_EN);
++
++	ret = drm_hdmi_infoframe_set_hdr_metadata(&frame, conn_state);
++	if (ret < 0)
++		return;
++
++	ret = hdmi_drm_infoframe_check(&frame);
++	if (WARN_ON(ret))
++		return;
++
++	hdmi_writeb(hdmi, frame.version, HDMI_FC_DRM_HB0);
++	hdmi_writeb(hdmi, frame.length, HDMI_FC_DRM_HB1);
++	hdmi_writeb(hdmi, frame.eotf, HDMI_FC_DRM_PB0);
++	hdmi_writeb(hdmi, frame.metadata_type, HDMI_FC_DRM_PB1);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[0].x),
++		    HDMI_FC_DRM_PB2);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[0].x),
++		    HDMI_FC_DRM_PB3);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[0].y),
++		    HDMI_FC_DRM_PB4);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[0].y),
++		    HDMI_FC_DRM_PB5);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[1].x),
++		    HDMI_FC_DRM_PB6);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[1].x),
++		    HDMI_FC_DRM_PB7);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[1].y),
++		    HDMI_FC_DRM_PB8);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[1].y),
++		    HDMI_FC_DRM_PB9);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[2].x),
++		    HDMI_FC_DRM_PB10);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[2].x),
++		    HDMI_FC_DRM_PB11);
++	hdmi_writeb(hdmi, HDR_LSB(frame.display_primaries[2].y),
++		    HDMI_FC_DRM_PB12);
++	hdmi_writeb(hdmi, HDR_MSB(frame.display_primaries[2].y),
++		    HDMI_FC_DRM_PB13);
++	hdmi_writeb(hdmi, HDR_LSB(frame.white_point.x), HDMI_FC_DRM_PB14);
++	hdmi_writeb(hdmi, HDR_MSB(frame.white_point.x), HDMI_FC_DRM_PB15);
++	hdmi_writeb(hdmi, HDR_LSB(frame.white_point.y), HDMI_FC_DRM_PB16);
++	hdmi_writeb(hdmi, HDR_MSB(frame.white_point.y), HDMI_FC_DRM_PB17);
++	hdmi_writeb(hdmi, HDR_LSB(frame.max_display_mastering_luminance),
++		    HDMI_FC_DRM_PB18);
++	hdmi_writeb(hdmi, HDR_MSB(frame.max_display_mastering_luminance),
++		    HDMI_FC_DRM_PB19);
++	hdmi_writeb(hdmi, HDR_LSB(frame.min_display_mastering_luminance),
++		    HDMI_FC_DRM_PB20);
++	hdmi_writeb(hdmi, HDR_MSB(frame.min_display_mastering_luminance),
++		    HDMI_FC_DRM_PB21);
++	hdmi_writeb(hdmi, HDR_LSB(frame.max_cll), HDMI_FC_DRM_PB22);
++	hdmi_writeb(hdmi, HDR_MSB(frame.max_cll), HDMI_FC_DRM_PB23);
++	hdmi_writeb(hdmi, HDR_LSB(frame.max_fall), HDMI_FC_DRM_PB24);
++	hdmi_writeb(hdmi, HDR_MSB(frame.max_fall), HDMI_FC_DRM_PB25);
++	hdmi_writeb(hdmi, 1, HDMI_FC_DRM_UP);
++	hdmi_modb(hdmi, HDMI_FC_PACKET_TX_EN_DRM_ENABLE,
++		  HDMI_FC_PACKET_TX_EN_DRM_MASK, HDMI_FC_PACKET_TX_EN);
++}
++
+ static void hdmi_av_composer(struct dw_hdmi *hdmi,
+ 			     const struct drm_display_mode *mode)
+ {
+@@ -1995,6 +2068,7 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
+ 		/* HDMI Initialization Step F - Configure AVI InfoFrame */
+ 		hdmi_config_AVI(hdmi, mode);
+ 		hdmi_config_vendor_specific_infoframe(hdmi, mode);
++		hdmi_config_drm_infoframe(hdmi);
+ 	} else {
+ 		dev_dbg(hdmi->dev, "%s DVI mode\n", __func__);
+ 	}
+@@ -2189,6 +2263,36 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+ 	return dw_hdmi_connector_update_edid(connector, true);
+ }
+ 
++static bool blob_equal(const struct drm_property_blob *a,
++		       const struct drm_property_blob *b)
++{
++	if (a && b)
++		return a->length == b->length &&
++			!memcmp(a->data, b->data, a->length);
++
++	return !a == !b;
++}
++
++static int dw_hdmi_connector_atomic_check(struct drm_connector *conn,
++	struct drm_connector_state *new_state)
++{
++        struct drm_connector_state *old_state =
++                drm_atomic_get_old_connector_state(new_state->state, conn);
++	struct drm_crtc_state *crtc_state;
++
++	if (!new_state->crtc)
++		return 0;
++
++	crtc_state = drm_atomic_get_new_crtc_state(new_state->state,
++						   new_state->crtc);
++
++	if (!blob_equal(new_state->hdr_output_metadata,
++			old_state->hdr_output_metadata))
++		crtc_state->mode_changed = true;
++
++	return 0;
++}
++
+ static void dw_hdmi_connector_force(struct drm_connector *connector)
+ {
+ 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+@@ -2213,6 +2317,7 @@ static const struct drm_connector_funcs dw_hdmi_connector_funcs = {
+ 
+ static const struct drm_connector_helper_funcs dw_hdmi_connector_helper_funcs = {
+ 	.get_modes = dw_hdmi_connector_get_modes,
++	.atomic_check = dw_hdmi_connector_atomic_check,
+ };
+ 
+ static int dw_hdmi_bridge_attach(struct drm_bridge *bridge)
+@@ -2229,6 +2334,10 @@ static int dw_hdmi_bridge_attach(struct drm_bridge *bridge)
+ 	drm_connector_init(bridge->dev, connector, &dw_hdmi_connector_funcs,
+ 			   DRM_MODE_CONNECTOR_HDMIA);
+ 
++	if (hdmi->version >= 0x200a && hdmi->plat_data->drm_infoframe)
++		drm_object_attach_property(&connector->base,
++			connector->dev->mode_config.hdr_output_metadata_property, 0);
++
+ 	drm_connector_attach_encoder(connector, encoder);
+ 
+ 	return 0;
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
+index 26d2f1b16025..5d0325e891a9 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
+@@ -265,6 +265,7 @@
+ #define HDMI_FC_POL2                            0x10DB
+ #define HDMI_FC_PRCONF                          0x10E0
+ #define HDMI_FC_SCRAMBLER_CTRL                  0x10E1
++#define HDMI_FC_PACKET_TX_EN                    0x10E3
+ 
+ #define HDMI_FC_GMD_STAT                        0x1100
+ #define HDMI_FC_GMD_EN                          0x1101
+@@ -300,6 +301,37 @@
+ #define HDMI_FC_GMD_PB26                        0x111F
+ #define HDMI_FC_GMD_PB27                        0x1120
+ 
++#define HDMI_FC_DRM_UP                          0x1167
++#define HDMI_FC_DRM_HB0                         0x1168
++#define HDMI_FC_DRM_HB1                         0x1169
++#define HDMI_FC_DRM_PB0                         0x116A
++#define HDMI_FC_DRM_PB1                         0x116B
++#define HDMI_FC_DRM_PB2                         0x116C
++#define HDMI_FC_DRM_PB3                         0x116D
++#define HDMI_FC_DRM_PB4                         0x116E
++#define HDMI_FC_DRM_PB5                         0x116F
++#define HDMI_FC_DRM_PB6                         0x1170
++#define HDMI_FC_DRM_PB7                         0x1171
++#define HDMI_FC_DRM_PB8                         0x1172
++#define HDMI_FC_DRM_PB9                         0x1173
++#define HDMI_FC_DRM_PB10                        0x1174
++#define HDMI_FC_DRM_PB11                        0x1175
++#define HDMI_FC_DRM_PB12                        0x1176
++#define HDMI_FC_DRM_PB13                        0x1177
++#define HDMI_FC_DRM_PB14                        0x1178
++#define HDMI_FC_DRM_PB15                        0x1179
++#define HDMI_FC_DRM_PB16                        0x117A
++#define HDMI_FC_DRM_PB17                        0x117B
++#define HDMI_FC_DRM_PB18                        0x117C
++#define HDMI_FC_DRM_PB19                        0x117D
++#define HDMI_FC_DRM_PB20                        0x117E
++#define HDMI_FC_DRM_PB21                        0x117F
++#define HDMI_FC_DRM_PB22                        0x1180
++#define HDMI_FC_DRM_PB23                        0x1181
++#define HDMI_FC_DRM_PB24                        0x1182
++#define HDMI_FC_DRM_PB25                        0x1183
++#define HDMI_FC_DRM_PB26                        0x1184
++
+ #define HDMI_FC_DBGFORCE                        0x1200
+ #define HDMI_FC_DBGAUD0CH0                      0x1201
+ #define HDMI_FC_DBGAUD1CH0                      0x1202
+@@ -766,6 +798,11 @@ enum {
+ 	HDMI_FC_PRCONF_OUTPUT_PR_FACTOR_MASK = 0x0F,
+ 	HDMI_FC_PRCONF_OUTPUT_PR_FACTOR_OFFSET = 0,
+ 
++/* FC_PACKET_TX_EN field values */
++	HDMI_FC_PACKET_TX_EN_DRM_MASK = 0x80,
++	HDMI_FC_PACKET_TX_EN_DRM_ENABLE = 0x80,
++	HDMI_FC_PACKET_TX_EN_DRM_DISABLE = 0x00,
++
+ /* FC_AVICONF0-FC_AVICONF3 field values */
+ 	HDMI_FC_AVICONF0_PIX_FMT_MASK = 0x03,
+ 	HDMI_FC_AVICONF0_PIX_FMT_RGB = 0x00,
+diff --git a/include/drm/bridge/dw_hdmi.h b/include/drm/bridge/dw_hdmi.h
+index 91fe1ff1e0ea..8c0f6e949407 100644
+--- a/include/drm/bridge/dw_hdmi.h
++++ b/include/drm/bridge/dw_hdmi.h
+@@ -131,6 +131,7 @@ struct dw_hdmi_plat_data {
+ 	unsigned long input_bus_format;
+ 	unsigned long input_bus_encoding;
+ 	bool ycbcr_420_allowed;
++	bool drm_infoframe;
+ 
+ 	/* Vendor PHY support */
+ 	const struct dw_hdmi_phy_ops *phy_ops;
+-- 
+2.21.0
+
+From 119bb945bd4d5f48b063bb00046b270325269d44 Mon Sep 17 00:00:00 2001
+From: Jonas Karlman <jonas@kwiboo.se>
+Date: Sun, 26 May 2019 16:37:29 +0000
+Subject: [PATCH 9/9] drm/sun4i: Enable DRM InfoFrame support on H6
+
+This patch enables Dynamic Range and Mastering InfoFrame on H6.
+
+Cc: Maxime Ripard <maxime.ripard@bootlin.com>
+Cc: Jernej Skrabec <jernej.skrabec@siol.net>
+Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
+---
+ drivers/gpu/drm/sun4i/sun8i_dw_hdmi.c | 2 ++
+ drivers/gpu/drm/sun4i/sun8i_dw_hdmi.h | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.c b/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.c
+index 39d8509d96a0..b80164dd8ad8 100644
+--- a/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.c
++++ b/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.c
+@@ -189,6 +189,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
+ 	sun8i_hdmi_phy_init(hdmi->phy);
+ 
+ 	plat_data->mode_valid = hdmi->quirks->mode_valid;
++	plat_data->drm_infoframe = hdmi->quirks->drm_infoframe;
+ 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
+ 
+ 	platform_set_drvdata(pdev, hdmi);
+@@ -255,6 +256,7 @@ static const struct sun8i_dw_hdmi_quirks sun8i_a83t_quirks = {
+ 
+ static const struct sun8i_dw_hdmi_quirks sun50i_h6_quirks = {
+ 	.mode_valid = sun8i_dw_hdmi_mode_valid_h6,
++	.drm_infoframe = true,
+ };
+ 
+ static const struct of_device_id sun8i_dw_hdmi_dt_ids[] = {
+diff --git a/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.h b/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.h
+index 720c5aa8adc1..2a0ec08ee236 100644
+--- a/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.h
++++ b/drivers/gpu/drm/sun4i/sun8i_dw_hdmi.h
+@@ -178,6 +178,7 @@ struct sun8i_dw_hdmi_quirks {
+ 	enum drm_mode_status (*mode_valid)(struct drm_connector *connector,
+ 					   const struct drm_display_mode *mode);
+ 	unsigned int set_rate : 1;
++	unsigned int drm_infoframe : 1;
+ };
+ 
+ struct sun8i_dw_hdmi {
+-- 
+2.21.0
+
