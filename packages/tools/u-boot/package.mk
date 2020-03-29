@@ -21,17 +21,27 @@ fi
 PKG_NEED_UNPACK="$PROJECT_DIR/$PROJECT/bootloader"
 [ -n "$DEVICE" ] && PKG_NEED_UNPACK+=" $PROJECT_DIR/$PROJECT/devices/$DEVICE/bootloader"
 
-case "$PROJECT" in
-  Rockchip)
-    PKG_VERSION="8659d08d2b589693d121c1298484e861b7dafc4f"
-    PKG_SHA256="3f9f2bbd0c28be6d7d6eb909823fee5728da023aca0ce37aef3c8f67d1179ec1"
-    PKG_URL="https://github.com/rockchip-linux/u-boot/archive/$PKG_VERSION.tar.gz"
-    PKG_PATCH_DIRS="rockchip"
+case "$DEVICE" in
+  H2)
+    PKG_VERSION="v2019.10"
+    PKG_SHA256="47427ac301a7fcf76d73196b920c90d4ef63175cf6471c916993ee60de329ee8"
+    PKG_URL="https://github.com/u-boot/u-boot/archive/$PKG_VERSION.tar.gz"
+    PKG_PATCH_DIRS="Allwinner-H2"
     ;;
   *)
-    PKG_VERSION="v2020.01"
-    PKG_SHA256="e981e02592f7b5386e5bc2b8a076aebc47d90b0ec9ae62be4b76daadc083b3ef"
-    PKG_URL="https://github.com/u-boot/u-boot/archive/$PKG_VERSION.tar.gz"
+    case "$PROJECT" in
+      Rockchip)
+        PKG_VERSION="8659d08d2b589693d121c1298484e861b7dafc4f"
+        PKG_SHA256="3f9f2bbd0c28be6d7d6eb909823fee5728da023aca0ce37aef3c8f67d1179ec1"
+        PKG_URL="https://github.com/rockchip-linux/u-boot/archive/$PKG_VERSION.tar.gz"
+        PKG_PATCH_DIRS="rockchip"
+        ;;
+      *)
+        PKG_VERSION="v2020.01"
+        PKG_SHA256="e981e02592f7b5386e5bc2b8a076aebc47d90b0ec9ae62be4b76daadc083b3ef"
+        PKG_URL="https://github.com/u-boot/u-boot/archive/$PKG_VERSION.tar.gz"
+        ;;
+    esac
     ;;
 esac
 
