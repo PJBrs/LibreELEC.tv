@@ -1,0 +1,75 @@
+From ef24008d02c5094c61a5dfe43e75624fc5e6bb7c Mon Sep 17 00:00:00 2001
+From: Ondrej Jirman <megous@megous.com>
+Date: Mon, 14 May 2018 01:13:01 +0200
+Subject: [PATCH 08/41] ARM: dts: sunxi-h3-h5: Add more CPU OPP for H3/H5
+
+These OPPs can be used with better cooling and/or thermal regulation.
+
+Signed-off-by: Ondrej Jirman <megous@megous.com>
+(cherry picked from commit df3c893303a8a24c20bc833710a8e6e7a44eadcf)
+---
+ arch/arm/boot/dts/sunxi-h3-h5.dtsi | 36 ++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/arch/arm/boot/dts/sunxi-h3-h5.dtsi b/arch/arm/boot/dts/sunxi-h3-h5.dtsi
+index 4b5052342de1..3f9baceae366 100644
+--- a/arch/arm/boot/dts/sunxi-h3-h5.dtsi
++++ b/arch/arm/boot/dts/sunxi-h3-h5.dtsi
+@@ -103,6 +103,12 @@
+ 		compatible = "operating-points-v2";
+ 		opp-shared;
+ 
++		opp-480000000 {
++			opp-hz = /bits/ 64 <480000000>;
++			opp-microvolt = <1040000 1040000 1300000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
+ 		opp-648000000 {
+ 			opp-hz = /bits/ 64 <648000000>;
+ 			opp-microvolt = <1040000 1040000 1300000>;
+@@ -115,11 +121,41 @@
+ 			clock-latency-ns = <244144>; /* 8 32k periods */
+ 		};
+ 
++		opp-960000000 {
++			opp-hz = /bits/ 64 <960000000>;
++			opp-microvolt = <1200000 1200000 1300000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
+ 		opp-1008000000 {
+ 			opp-hz = /bits/ 64 <1008000000>;
+ 			opp-microvolt = <1200000 1200000 1300000>;
+ 			clock-latency-ns = <244144>; /* 8 32k periods */
+ 		};
++
++		opp-1104000000 {
++			opp-hz = /bits/ 64 <1104000000>;
++			opp-microvolt = <1320000 1320000 1320000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
++		opp-1200000000 {
++			opp-hz = /bits/ 64 <1200000000>;
++			opp-microvolt = <1320000 1320000 1320000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
++		opp-1296000000 {
++			opp-hz = /bits/ 64 <1296000000>;
++			opp-microvolt = <1340000 1340000 1340000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
++		opp-1368000000 {
++			opp-hz = /bits/ 64 <1368000000>;
++			opp-microvolt = <1400000 1400000 1400000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
+ 	};
+ 
+ 	de: display-engine {
+-- 
+2.17.1
+

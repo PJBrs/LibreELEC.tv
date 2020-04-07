@@ -1,0 +1,61 @@
+From 2750e0c7aff88f2c74c30f04c6ae8d7a40f65c4c Mon Sep 17 00:00:00 2001
+From: Ondrej Jirman <megous@megous.com>
+Date: Sun, 1 Sep 2019 21:02:22 +0200
+Subject: [PATCH 09/41] ARM: dts: sun8i-h3: Add thermal trip points/cooling
+ maps
+
+This enables passive cooling by down-regulating CPU voltage
+and frequency.
+
+Signed-off-by: Ondrej Jirman <megous@megous.com>
+(cherry picked from commit 11a2d6df305dc1b593a7349ff92853bc22949268)
+---
+ arch/arm/boot/dts/sun8i-h3.dtsi | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/arch/arm/boot/dts/sun8i-h3.dtsi b/arch/arm/boot/dts/sun8i-h3.dtsi
+index 7d2e30a00cd2..dca51548881a 100644
+--- a/arch/arm/boot/dts/sun8i-h3.dtsi
++++ b/arch/arm/boot/dts/sun8i-h3.dtsi
+@@ -41,6 +41,7 @@
+  */
+ 
+ #include "sunxi-h3-h5.dtsi"
++#include <dt-bindings/thermal/thermal.h>
+ 
+ / {
+ 	cpus {
+@@ -204,6 +205,30 @@
+ 			polling-delay-passive = <0>;
+ 			polling-delay = <0>;
+ 			thermal-sensors = <&ths 0>;
++
++			trips {
++				cpu_hot_trip: cpu-hot {
++					temperature = <80000>;
++					hysteresis = <2000>;
++					type = "passive";
++				};
++
++				cpu_very_hot_trip: cpu-very-hot {
++					temperature = <100000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				cpu-hot-limit {
++					trip = <&cpu_hot_trip>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
+ 		};
+ 	};
+ };
+-- 
+2.17.1
+
